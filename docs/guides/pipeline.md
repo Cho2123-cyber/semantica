@@ -243,6 +243,123 @@ result   = engine.execute_pipeline(pipeline)
 
 `set_parallelism(n)` tells the engine how many steps it may run simultaneously. The topological sort guarantees that only steps whose dependencies are all completed are eligible for concurrent execution — you cannot accidentally run a step before its inputs are ready.
 
+## Composing Pipelines
+
+A pipeline you have already built is a reusable unit. `PipelineComposer` takes existing pipelines and produces a new one — chained end to end, merged into parallel branches, or nested into a single position of a larger pipeline. Source pipelines are copied rather than mutated, so the same sub-pipeline can appear in as many compositions as you need.
+
+```python
+from semantica.pipeline import ExecutionEngine, PipelineComposer
+
+composer = PipelineComposer()
+
+# ingest_pipeline and kg_pipeline were each built with PipelineBuilder.build()
+end_to_end = composer.chain(ingest_pipeline, kg_pipeline, name="end_to_end")
+
+result = ExecutionEngine().execute_pipeline(end_to_end)
+```
+
+`chain()` makes every entry step of the next pipeline wait for every terminal step of the previous one, so `kg_pipeline` starts only after `ingest_pipeline` has fully finished.
+
+### Step Names Are Namespaced
+
+Two pipelines will often both have a step called `parse`. Composition prefixes each source pipeline's step names with the pipeline's own name and rewrites the dependencies to match:
+
+```python
+[step.name for step in end_to_end.steps]
+# ['ingest_pipeline.load',  'ingest_pipeline.parse',
+#  'kg_pipeline.extract',   'kg_pipeline.store']
+```
+
+Pass `namespace=False` to keep the original names — composition then raises `ValidationError` if any name collides — or supply one explicit prefix per pipeline with `namespace=["raw", "graph"]`. Composing a pipeline with itself works: the second copy gets a `_2` suffix on its namespace.
+
+### Merging Parallel Branches
+
+`merge()` places pipelines side by side without adding dependencies between them, so they stay independent branches of one graph and `ParallelismManager` is free to run them concurrently. Pass a `join` step to wait for every branch:
+
+```python
+from semantica.pipeline import PipelineComposer, PipelineStep
+
+composer = PipelineComposer()
+
+merged = composer.merge(
+    stix_pipeline,
+    rss_pipeline,
+    name="multi_source",
+    join=PipelineStep(
+        name="merge_graphs",
+        step_type="kg_merge",
+        handler=merge_into_graph,
+    ),
+)
+
+engine = ExecutionEngine(max_workers=2)
+result = engine.execute_pipeline(merged)
+```
+
+The join step's dependencies are extended with every branch's terminal step. It is never namespaced: it belongs to the composition rather than to any single source.
+
+### Nesting a Sub-Pipeline
+
+`nest()` splices a pipeline into one position of another. Only the child is namespaced — the parent keeps its own step names — so the same sub-pipeline can be nested at several positions under different prefixes.
+
+| `mode` | Effect |
+| --- | --- |
+| `"after"` (default) | The child runs after the anchor step. Steps that depended on the anchor now depend on the child's terminal steps instead. |
+| `"before"` | The child runs before the anchor step. The child inherits the anchor's dependencies and the anchor waits for the child. |
+| `"replace"` | The child takes the anchor's place and the anchor is removed. Both sides are rewired around it. |
+
+```python
+# Insert a normalization sub-pipeline between "ingest" and everything downstream
+with_normalize = composer.nest(
+    main_pipeline,
+    normalize_pipeline,
+    at="ingest",
+    mode="after",
+    namespace="normalize",
+)
+
+[step.name for step in with_normalize.steps]
+# ['ingest', 'normalize.clean', 'normalize.dedupe', 'extract', 'store']
+```
+
+### Including a Sub-Pipeline While You Build
+
+`PipelineBuilder.include()` is the DSL-side equivalent: it drops a built pipeline into a builder you are still assembling, and returns the builder so it chains with the other DSL methods.
+
+```python
+builder = PipelineBuilder()
+builder.add_step("fetch", "http_ingest", handler=fetch_feed, url=FEED_URL)
+builder.include(normalize_pipeline, after="fetch")
+builder.add_step("store", "kg_merge", handler=merge_into_graph)
+
+# Included steps carry the namespace prefix, so wire downstream steps to
+# the prefixed name
+builder.connect_steps("normalize_pipeline.dedupe", "store")
+
+pipeline = builder.build("feed_pipeline")
+```
+
+`after=` accepts a single step name or a list of them, and `namespace=` behaves exactly as it does on `nest()`.
+
+### What Composition Guarantees
+
+Every composition runs `PipelineValidator` on the result before returning it, raising `ValidationError` on duplicate step names, missing dependencies, or cycles. Pass `validate=False` when you are deliberately assembling a pipeline in stages and know it is still incomplete.
+
+Composed pipelines record where they came from, and the record survives serialization:
+
+```python
+end_to_end.metadata["composition"]
+# {'operation': 'chain',
+#  'sources': [
+#      {'name': 'ingest_pipeline', 'namespace': 'ingest_pipeline', 'step_count': 2},
+#      {'name': 'kg_pipeline',     'namespace': 'kg_pipeline',     'step_count': 2},
+#  ]}
+```
+
+<Warning>
+  `ExecutionEngine` threads a single value through the topological order, so when a pipeline has several terminal steps, the next pipeline in a chain receives whatever the last terminal produced. Give a pipeline one terminal step — or an explicit `join` — whenever the hand-off value matters.
+</Warning>
+
 ## Common Pitfalls
 
 **Forgetting to return data.** If a step handler doesn't return anything, downstream steps receive `None` as their `data` parameter. This usually causes crashes or silent failures. Every non-terminal step should return data for the next stage.

@@ -9,7 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Pipeline composition: chain, merge, and nest existing pipelines into a larger one**
+  - New `PipelineComposer` (`semantica/pipeline/pipeline_composer.py`), exported from `semantica.pipeline`. A pipeline built with `PipelineBuilder.build()` was previously a terminal artifact — there was no supported way to reuse one inside another, so a stage shared by several pipelines had to be re-declared step by step in each of them
+  - `chain(*pipelines)` makes every entry step of each pipeline wait for every terminal step of the one before it; `merge(*pipelines, join=None)` keeps pipelines as independent branches of a single graph, with an optional join step that waits for all of them; `nest(parent, child, at, mode)` splices a pipeline in `"after"`, `"before"`, or in `"replace"` of one parent step, rewiring both sides of the seam
+  - Step names are namespaced with their source pipeline's name and dependencies are rewritten to match, so two pipelines that both have a `parse` step compose cleanly. `namespace=False` keeps the original names and raises `ValidationError` on a collision; explicit per-pipeline prefixes are also accepted. Composing a pipeline with itself works — the second copy gets a `_2` suffix on its namespace
+  - Source pipelines are never mutated: each composition returns fresh `PipelineStep` objects with run status reset, and every result is checked with `PipelineValidator` before it is returned (`validate=False` opts out). Composed pipelines record their lineage in `metadata["composition"]`, which stays plain data so it survives `PipelineSerializer` round trips
+  - `PipelineBuilder.include(pipeline, namespace=True, after=None)` brings the same capability into the DSL, dropping a built pipeline into a builder that is still being assembled; it returns the builder, so it chains with `connect_steps()` and `set_parallelism()`
+  - New coverage in `tests/pipeline/test_pipeline_composer.py` (54 tests) across all three operations, namespacing and collision handling, source immutability, execution ordering, config/metadata merging, serialization, and validation failures
+  - Documented in `docs/guides/pipeline.md`, `docs/reference/pipeline.md`, `semantica/pipeline/pipeline_usage.md`, and the `semantica.pipeline` section of the README
+
 ### Fixed
+
+- **`PipelineSerializer` round trips silently dropped every step dependency**
+  - `serialize_pipeline()` writes `dependencies`, `delta_mode`, `base_version_id`, and `target_version_id` as siblings of each step's `"config"` key, but `build_pipeline()` — which `deserialize_pipeline()` delegates to — only read what was inside `"config"`. Any pipeline wired with `connect_steps()` came back from a round trip as a flat set of independent steps, so `ExecutionEngine` ran them in declaration order rather than dependency order: silently wrong output instead of an error. Restoring a serialized pipeline "on any machine and execute" is documented behavior in `docs/reference/pipeline.md`, and the delta-mode fields were dropped the same way
+  - `build_pipeline()` now applies those sibling keys when they are present. Step dicts that declare dependencies *inside* `"config"` — the form documented for hand-written pipeline configs in `docs/guides/pipeline.md` — behave exactly as before
+  - New regression coverage in `tests/pipeline/test_pipeline.py::TestPipelineSerializerRoundTrip`, including a pipeline whose declaration order is the reverse of its dependency order and a delta-mode step
 
 - **MCP server reported a stale `0.4.0` version instead of the installed package version** (#870, closes #863) by @oiahoon
   - `semantica/mcp_server/__init__.py` hardcoded `"version": "0.4.0"` in both the MCP `initialize` response (`SERVER_INFO`) and the `semantica://schema/info` resource, regardless of the actual installed `semantica` version — every MCP client (Claude Desktop, Windsurf, Cline, Continue, VS Code Copilot, etc.) showed the wrong server version. Both surfaces now derive from `semantica.__version__`, the package's authoritative version source, so they can no longer drift from `pyproject.toml`

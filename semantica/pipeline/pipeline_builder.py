@@ -172,6 +172,76 @@ class PipelineBuilder:
 
         return self
 
+    def include(
+        self,
+        pipeline: "Pipeline",
+        namespace: Union[bool, str, None] = True,
+        separator: str = ".",
+        after: Optional[Union[str, List[str]]] = None,
+    ) -> "PipelineBuilder":
+        """
+        Include an already-built pipeline as a reusable sub-pipeline.
+
+        The pipeline's steps are copied — the source is never mutated — and
+        namespaced so the same sub-pipeline can be included more than once
+        under different prefixes.
+
+        Args:
+            pipeline: Built pipeline to include
+            namespace: ``True`` to prefix the included steps with the
+                pipeline's name, a string for an explicit prefix, or ``False``
+                / ``None`` to keep the step names as they are
+            separator: Separator between the namespace and the step name
+            after: Name (or names) of steps already in this builder that the
+                included sub-pipeline must wait for
+
+        Returns:
+            Self for method chaining
+
+        Raises:
+            ValidationError: The pipeline has no steps, a step in ``after`` is
+                not in this builder, or an included step name is already taken
+        """
+        from .pipeline_composer import entry_steps, namespace_steps
+
+        if not getattr(pipeline, "steps", None):
+            raise ValidationError(
+                f"Cannot include pipeline '{getattr(pipeline, 'name', '?')}': "
+                f"it has no steps"
+            )
+
+        prefix = pipeline.name if namespace is True else (namespace or None)
+        included = namespace_steps(pipeline.steps, prefix, separator)
+
+        existing = {step.name for step in self.steps}
+        collisions = [step.name for step in included if step.name in existing]
+        if collisions:
+            raise ValidationError(
+                f"Cannot include pipeline '{pipeline.name}': step names already "
+                f"in use: {collisions}"
+            )
+
+        if after is not None:
+            dependencies = [after] if isinstance(after, str) else list(after)
+            missing = [name for name in dependencies if name not in existing]
+            if missing:
+                raise ValidationError(f"Steps not found in builder: {missing}")
+
+            for step in entry_steps(included):
+                for name in dependencies:
+                    if name not in step.dependencies:
+                        step.dependencies.append(name)
+                if "dependencies" in step.config:
+                    step.config["dependencies"] = list(step.dependencies)
+
+        self.steps.extend(included)
+        self.logger.debug(
+            f"Included pipeline '{pipeline.name}' as {len(included)} step(s)"
+            + (f" under namespace '{prefix}'" if prefix else "")
+        )
+
+        return self
+
     def set_parallelism(self, level: int) -> "PipelineBuilder":
         """
         Set parallelism level.
@@ -272,7 +342,10 @@ class PipelineBuilder:
                 step_name = step_config.get("name")
                 step_type = step_config.get("type")
                 if step_name and step_type:
-                    self.add_step(step_name, step_type, **step_config.get("config", {}))
+                    step = self.add_step(
+                        step_name, step_type, **step_config.get("config", {})
+                    )
+                    self._restore_step_fields(step, step_config)
 
             # Set parallelism if specified
             if "parallelism" in pipeline_config:
@@ -294,6 +367,38 @@ class PipelineBuilder:
                 tracking_id, status="failed", message=str(e)
             )
             raise
+
+    @staticmethod
+    def _restore_step_fields(step: PipelineStep, step_config: Dict[str, Any]) -> None:
+        """
+        Apply the step fields that live beside "config" in a step dict.
+
+        PipelineSerializer.serialize_pipeline() writes dependencies and the
+        delta settings as siblings of "config", while add_step() only reads
+        what is inside "config". Without this, a serialize/deserialize round
+        trip would drop the dependency graph and silently execute the restored
+        pipeline in declaration order instead of dependency order.
+
+        Step dicts that carry dependencies inside "config" — the form
+        documented for hand-written pipeline configs — keep working: the
+        sibling key is applied only when present.
+
+        Args:
+            step: Step created by add_step()
+            step_config: Step dictionary from the pipeline configuration
+        """
+        if "dependencies" in step_config:
+            dependencies = list(step_config["dependencies"] or [])
+            step.dependencies = dependencies
+            if "dependencies" in step.config:
+                step.config["dependencies"] = list(dependencies)
+
+        if "delta_mode" in step_config:
+            step.delta_mode = bool(step_config["delta_mode"])
+        if "base_version_id" in step_config:
+            step.base_version_id = step_config["base_version_id"]
+        if "target_version_id" in step_config:
+            step.target_version_id = step_config["target_version_id"]
 
     def register_step_handler(self, step_type: str, handler: Callable) -> None:
         """

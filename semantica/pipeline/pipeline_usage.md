@@ -137,6 +137,54 @@ builder.connect_steps("step2", "step3")
 pipeline = builder.build()
 ```
 
+### Pipeline Composition
+
+Built pipelines are reusable units. `PipelineComposer` combines them into a
+larger pipeline, copying the sources rather than mutating them.
+
+```python
+from semantica.pipeline import PipelineComposer, PipelineStep
+
+composer = PipelineComposer()
+
+# Sequential: kg_pipeline starts after ingest_pipeline has fully finished
+end_to_end = composer.chain(ingest_pipeline, kg_pipeline, name="end_to_end")
+
+# Parallel branches with a join step that waits for all of them
+merged = composer.merge(
+    stix_pipeline,
+    rss_pipeline,
+    join=PipelineStep(name="merge", step_type="kg_merge", handler=merge_graphs),
+)
+
+# Nested: splice a sub-pipeline in after one parent step
+# mode is "after" (default), "before", or "replace"
+with_normalize = composer.nest(
+    main_pipeline, normalize_pipeline, at="ingest", mode="after"
+)
+```
+
+Step names are prefixed with their source pipeline's name
+(`ingest_pipeline.parse`) and dependencies are rewritten to match. Pass
+`namespace=False` to keep the original names — a collision then raises
+`ValidationError` — or give one explicit prefix per pipeline. Composed
+pipelines record their lineage in `metadata["composition"]` and are validated
+before they are returned.
+
+### Including a Sub-Pipeline in a Builder
+
+```python
+from semantica.pipeline import PipelineBuilder
+
+builder = PipelineBuilder()
+builder.add_step("fetch", "http_ingest", handler=fetch_feed)
+builder.include(normalize_pipeline, after="fetch")
+builder.add_step("store", "kg_merge", handler=merge_into_graph)
+builder.connect_steps("normalize_pipeline.dedupe", "store")
+
+pipeline = builder.build("feed_pipeline")
+```
+
 ### Pipeline Serialization
 
 ```python
@@ -859,7 +907,14 @@ Error classification uses pattern matching and exception type analysis.
 - `register_step_handler(step_type, handler)`: Register handler
 - `get_step(step_name)`: Get step by name
 - `serialize(format="json")`: Serialize builder state
+- `include(pipeline, namespace=True, separator=".", after=None)`: Include a built pipeline as a sub-pipeline
 - `validate_pipeline()`: Validate pipeline structure
+
+#### PipelineComposer Methods
+
+- `chain(*pipelines, name=None, namespace=True, separator=".", config=None, validate=True)`: Run pipelines one after another
+- `merge(*pipelines, name=None, namespace=True, separator=".", join=None, config=None, validate=True)`: Run pipelines side by side, with an optional join step
+- `nest(parent, child, at, mode="after", name=None, namespace=True, separator=".", config=None, validate=True)`: Splice a pipeline into one position of another
 
 #### ExecutionEngine Methods
 

@@ -1,7 +1,13 @@
 import unittest
 from unittest.mock import MagicMock, patch
-from semantica.pipeline.pipeline_builder import PipelineBuilder, StepStatus
+
 from semantica.pipeline.execution_engine import ExecutionEngine, PipelineStatus
+from semantica.pipeline.pipeline_builder import (
+    PipelineBuilder,
+    PipelineSerializer,
+    StepStatus,
+)
+
 
 class TestPipelineModule(unittest.TestCase):
 
@@ -126,6 +132,101 @@ class TestPipelineModule(unittest.TestCase):
 
         detector = DuplicateDetector()
         self.assertIsNotNone(detector)
+
+
+class TestPipelineSerializerRoundTrip(unittest.TestCase):
+    """A serialized pipeline must come back with its dependency graph intact."""
+
+    def setUp(self):
+        self.mock_tracker_patcher = patch(
+            "semantica.utils.progress_tracker.get_progress_tracker"
+        )
+        self.mock_get_tracker = self.mock_tracker_patcher.start()
+        self.mock_get_tracker.return_value = MagicMock()
+        self.serializer = PipelineSerializer()
+
+    def tearDown(self):
+        self.mock_tracker_patcher.stop()
+
+    def _wired_pipeline(self):
+        """Declare steps in reverse order so declaration order != run order."""
+        builder = PipelineBuilder()
+        for name in ("C", "B", "A"):
+            builder.add_step(name, "type")
+        builder.connect_steps("A", "B")
+        builder.connect_steps("B", "C")
+        return builder.build("wired")
+
+    def test_round_trip_preserves_dependencies(self):
+        restored = self.serializer.deserialize_pipeline(
+            self.serializer.serialize_pipeline(self._wired_pipeline())
+        )
+
+        deps = {step.name: list(step.dependencies) for step in restored.steps}
+        self.assertEqual(deps, {"C": ["B"], "B": ["A"], "A": []})
+
+    def test_restored_pipeline_executes_in_dependency_order(self):
+        restored = self.serializer.deserialize_pipeline(
+            self.serializer.serialize_pipeline(self._wired_pipeline())
+        )
+
+        # Handlers are not serializable, so they are re-attached on restore.
+        order = []
+
+        def make_handler(label):
+            def handler(data, **kwargs):
+                order.append(label)
+                return data
+
+            return handler
+
+        for step in restored.steps:
+            step.handler = make_handler(step.name)
+
+        result = ExecutionEngine().execute_pipeline(restored, data=0)
+
+        self.assertTrue(result.success)
+        self.assertEqual(order, ["A", "B", "C"])
+
+    def test_round_trip_preserves_delta_settings(self):
+        builder = PipelineBuilder()
+        builder.add_step(
+            "delta",
+            "type",
+            delta_mode=True,
+            base_version_id="v1",
+            target_version_id="v2",
+        )
+        pipeline = builder.build("delta_pipeline")
+
+        restored = self.serializer.deserialize_pipeline(
+            self.serializer.serialize_pipeline(pipeline)
+        )
+
+        step = restored.steps[0]
+        self.assertTrue(step.delta_mode)
+        self.assertEqual(step.base_version_id, "v1")
+        self.assertEqual(step.target_version_id, "v2")
+
+    def test_dependencies_declared_inside_config_still_work(self):
+        # The hand-written config form documented in docs/guides/pipeline.md.
+        builder = PipelineBuilder()
+        pipeline = builder.build_pipeline(
+            {
+                "name": "from_config",
+                "steps": [
+                    {"name": "s1", "type": "t1", "config": {}},
+                    {
+                        "name": "s2",
+                        "type": "t2",
+                        "config": {"dependencies": ["s1"]},
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(pipeline.steps[1].dependencies, ["s1"])
+
 
 if __name__ == "__main__":
     unittest.main()

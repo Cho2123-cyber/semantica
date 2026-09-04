@@ -7,6 +7,7 @@ workflows with error handling, parallelism, and resource scheduling.
 
 Key Features:
     - Pipeline construction DSL for building workflows
+    - Pipeline composition: chain, merge, and nest existing pipelines
     - Pipeline execution engine with status tracking
     - Error handling and retry mechanisms
     - Parallel execution management
@@ -18,6 +19,7 @@ Key Features:
 
 Main Classes:
     - PipelineBuilder: Pipeline construction DSL
+    - PipelineComposer: Pipeline composition engine
     - ExecutionEngine: Pipeline execution engine
     - FailureHandler: Error handling and retry mechanisms
     - ParallelismManager: Parallel execution management
@@ -67,6 +69,7 @@ from .pipeline_builder import (
     PipelineStep,
     StepStatus,
 )
+from .pipeline_composer import PipelineComposer
 from .pipeline_templates import PipelineTemplate, PipelineTemplateManager
 from .pipeline_validator import PipelineValidator, ValidationResult
 from .resource_scheduler import (
@@ -83,6 +86,8 @@ __all__ = [
     "PipelineStep",
     "StepStatus",
     "PipelineSerializer",
+    # Composition
+    "PipelineComposer",
     # Execution
     "ExecutionEngine",
     "ExecutionResult",
