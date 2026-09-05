@@ -22,11 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`docs_check.py`'s stale-URL check could not see most of the repository**
+  - The check scanned `docs/**/*.md` plus `docs/docs.json` — 80 files. Everything a reader actually follows a repository link out of sat outside it: the cookbook notebooks, the GitHub issue and discussion templates, `CONTRIBUTING.md`, the editor plugin manifests. That is how an entire cookbook of dead Colab badges stayed green for so long
+  - Widened to 219 files: repo-root markdown plus `.md`, `.json`, `.yml`, `.yaml`, and `.ipynb` under `docs/`, `.github/`, `plugins/`, `cookbook/`, and `semantica/`
+  - Collection uses `os.walk` rather than `glob`. `glob` wildcards skip dot-prefixed entries, so `plugins/**/*.json` matches exactly one file while the plugin manifests actually live in `plugins/.claude-plugin/`, `plugins/.cline-plugin/` and seven more — 16 files a glob-based sweep would have silently missed, reproducing the blind spot being fixed
+  - Matching narrowed from a bare substring to the URL form `github.com/<stale org>/semantica`, which still catches Colab badges (`colab.research.google.com/github/<org>/...`) while leaving prose that discusses the rename — and the GitHub Sponsors account at `github.com/sponsors/Hawksight-AI` — correctly unflagged
+  - Reads for this check tolerate non-UTF-8 bytes: `plugins/skills/decision/SKILL.md` contains a stray `0x97`, which crashed the widened check outright. Repository URLs are ASCII, so lossy decoding cannot hide a match. That file's encoding is a separate pre-existing defect and was left alone
+
 - **Every cookbook notebook's "Open In Colab" badge pointed at a repository that no longer exists**
   - All 27 notebooks carrying a badge linked to `Hawksight-AI/semantica` — the stale org that `docs_check.py` already bans in docs markdown, and which its "No stale repo URLs" check never saw because that check only scans `docs/**/*.md`. Every badge was a dead link, so "Open In Colab" failed for the entire cookbook. Repointed to `semantica-agi/semantica`, the canonical repository named in `pyproject.toml`'s `[project.urls]`
   - The same stale org appeared in the "Questions or Issues? / Need Help?" footer link of 5 of those notebooks (32 occurrences in total); fixed alongside the badges, since a working badge above a dead repo link in the same notebook is still a broken page
   - **Fixed along the way**: 7 badges were broken independently of the org, pointing at notebook filenames that do not exist (`03_Document_Parsing.ipynb`'s badge targeted `04_Document_Parsing.ipynb`, `04_Data_Normalization.ipynb` targeted `05_Data_Normalization.ipynb`, and likewise for `07_Building_Knowledge_Graphs`, `08_Your_First_Knowledge_Graph`, `10_Graph_Analytics`, `12_Embedding_Generation`, and `16_Visualization`) — an off-by-one left over from a renumbering. Each badge now targets the notebook that carries it, verified against the files on disk
-  - Not changed: `Hawksight-AI/semantica` in `docs_check.py`, where it is the pattern the stale-URL check searches for. The same stale org also remains in `.github/`, `plugins/`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTORS.md`, `semantica/change_management/change_management_usage.md`, and `tests/ingest/test_notebook_02.py`; those are outside this PR's scope
+  - The same dead repository URL was then swept out of the rest of the repo: 55 occurrences across 20 files, covering `.github/` (issue/discussion templates, `SUPPORT.md`), `CONTRIBUTING.md`, `CONTRIBUTORS.md`, `CODE_OF_CONDUCT.md`, `CHANGELOG.md`'s own "GitHub Releases" link, all nine editor plugin manifests plus the plugin marketplace and README, `semantica/change_management/change_management_usage.md`, and a mocked clone URL in `tests/ingest/test_notebook_02.py`
+  - Deliberately not renamed: `github.com/sponsors/Hawksight-AI` in `.github/SUPPORT.md` and `github: Hawksight-AI` in `.github/FUNDING.yml`. Those name a GitHub Sponsors account, not a repository — renaming them with the repo URLs would point sponsorship somewhere else. `docs_check.py` keeps the stale strings too, as the patterns its check searches for
   - 10 cookbook notebooks carry no Colab badge at all and were left untouched
 
 - **`PipelineSerializer` round trips silently dropped every step dependency**
@@ -1236,4 +1244,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-For detailed release notes, see [GitHub Releases](https://github.com/Hawksight-AI/semantica/releases).
+For detailed release notes, see [GitHub Releases](https://github.com/semantica-agi/semantica/releases).
