@@ -633,3 +633,4 @@ StepStatus.SKIPPED    # Skipped due to FailureHandler "skip" strategy
 - [Semantic Extract](semantic_extract) — Core extraction step.
 - [Knowledge Graph](kg) — Graph construction step.
 - [Export](export) — Final output step.
+- [Pipeline Composition notebook](https://github.com/semantica-agi/semantica/blob/main/cookbook/advanced/15_Pipeline_Composition.ipynb) — Composing built pipelines · *Advanced*

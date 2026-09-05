@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Source pipelines are never mutated: each composition returns fresh `PipelineStep` objects with run status reset, and every result is checked with `PipelineValidator` before it is returned (`validate=False` opts out). Composed pipelines record their lineage in `metadata["composition"]`, which stays plain data so it survives `PipelineSerializer` round trips
   - `PipelineBuilder.include(pipeline, namespace=True, after=None)` brings the same capability into the DSL, dropping a built pipeline into a builder that is still being assembled; it returns the builder, so it chains with `connect_steps()` and `set_parallelism()`
   - New coverage in `tests/pipeline/test_pipeline_composer.py` (54 tests) across all three operations, namespacing and collision handling, source immutability, execution ordering, config/metadata merging, serialization, and validation failures
-  - Documented in `docs/guides/pipeline.md`, `docs/reference/pipeline.md`, `semantica/pipeline/pipeline_usage.md`, and the `semantica.pipeline` section of the README
+  - Documented in `docs/guides/pipeline.md`, `docs/reference/pipeline.md`, `semantica/pipeline/pipeline_usage.md`, and the `semantica.pipeline` section of the README, plus a runnable cookbook notebook at `cookbook/advanced/15_Pipeline_Composition.ipynb` (every code cell verified to run against the core package, no API keys or optional backends needed)
 
 ### Fixed
 

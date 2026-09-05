@@ -826,3 +826,4 @@ print(f"Compliance delta update: {result.output}")
 - [Semantic Extraction](semantic-extraction) — NER, relation extraction, triplet extraction, and event detection for the extract step
 - [Context Graphs](context-graphs) — building and querying the `ContextGraph` that the store step populates
 - [Provenance](provenance) — tracking the origin document, confidence score, and pipeline run ID for every extracted entity
+- [Pipeline Composition notebook](https://github.com/semantica-agi/semantica/blob/main/cookbook/advanced/15_Pipeline_Composition.ipynb) — runnable walkthrough of `chain()`, `merge()`, `nest()`, and `include()`
