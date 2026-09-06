@@ -22,12 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`plugins/skills/decision/SKILL.md` was not valid UTF-8, so its frontmatter could not be parsed**
+  - Two `0x97` bytes — Windows-1252 em dashes that never got transcoded — sat in the file, one of them inside the YAML frontmatter's `description:` value. Any UTF-8 loader reading that frontmatter fails outright with `'utf-8' codec can't decode byte 0x97`, so the skill's own description was unreadable; the other byte sat in the `explain <decision_id>` section body
+  - Both replaced with the UTF-8 em dash (`U+2014`) that the seven sibling `SKILL.md` files already use. The edit is byte-level: decoding the original as Windows-1252 yields exactly the text the fixed file yields as UTF-8, so nothing but those two characters changed
+  - This was the only non-UTF-8 text file in the repository; a fresh walk over every `.md`, `.py`, `.json`, `.yml`, `.yaml`, `.ipynb`, `.txt`, `.toml`, `.cfg`, `.ttl` and `.in` file now finds none
+
 - **`docs_check.py`'s stale-URL check could not see most of the repository**
   - The check scanned `docs/**/*.md` plus `docs/docs.json` — 80 files. Everything a reader actually follows a repository link out of sat outside it: the cookbook notebooks, the GitHub issue and discussion templates, `CONTRIBUTING.md`, the editor plugin manifests. That is how an entire cookbook of dead Colab badges stayed green for so long
   - Widened to 219 files: repo-root markdown plus `.md`, `.json`, `.yml`, `.yaml`, and `.ipynb` under `docs/`, `.github/`, `plugins/`, `cookbook/`, and `semantica/`
   - Collection uses `os.walk` rather than `glob`. `glob` wildcards skip dot-prefixed entries, so `plugins/**/*.json` matches exactly one file while the plugin manifests actually live in `plugins/.claude-plugin/`, `plugins/.cline-plugin/` and seven more — 16 files a glob-based sweep would have silently missed, reproducing the blind spot being fixed
   - Matching narrowed from a bare substring to the URL form `github.com/<stale org>/semantica`, which still catches Colab badges (`colab.research.google.com/github/<org>/...`) while leaving prose that discusses the rename — and the GitHub Sponsors account at `github.com/sponsors/Hawksight-AI` — correctly unflagged
-  - Reads for this check tolerate non-UTF-8 bytes: `plugins/skills/decision/SKILL.md` contains a stray `0x97`, which crashed the widened check outright. Repository URLs are ASCII, so lossy decoding cannot hide a match. That file's encoding is a separate pre-existing defect and was left alone
+  - Reads for this check tolerate non-UTF-8 bytes, which is what surfaced the `SKILL.md` encoding bug below: one stray `0x97` crashed the widened check outright. Repository URLs are ASCII, so lossy decoding cannot hide a match, and one bad byte in an unrelated file must not take the whole check down
 
 - **Every cookbook notebook's "Open In Colab" badge pointed at a repository that no longer exists**
   - All 27 notebooks carrying a badge linked to `Hawksight-AI/semantica` — the stale org that `docs_check.py` already bans in docs markdown, and which its "No stale repo URLs" check never saw because that check only scans `docs/**/*.md`. Every badge was a dead link, so "Open In Colab" failed for the entire cookbook. Repointed to `semantica-agi/semantica`, the canonical repository named in `pyproject.toml`'s `[project.urls]`
