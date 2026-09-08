@@ -67,6 +67,44 @@ def read(path: str) -> str:
     return open(path, encoding="utf-8").read()
 
 
+# Roots scanned for stale repository URLs. os.walk rather than glob: the plugin
+# directories are dot-prefixed (plugins/.claude-plugin/), and glob wildcards skip
+# dot-entries — the same blind spot that let a whole cookbook of dead Colab
+# badges sit outside this check while it only looked at docs/**/*.md.
+STALE_URL_ROOTS = [DOCS, ".github", "plugins", "cookbook", "semantica"]
+STALE_URL_EXTS = (".md", ".json", ".yml", ".yaml", ".ipynb")
+STALE_URL_PRUNE = {".git", "__pycache__", "node_modules", ".ipynb_checkpoints"}
+
+
+def read_lossy(path: str) -> str:
+    """Read a file for URL scanning, tolerating bytes that are not UTF-8.
+
+    Repository URLs are ASCII, so undecodable bytes can never hide a match —
+    and one bad byte in an unrelated file must not take the whole check down.
+    """
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        return fh.read()
+
+
+def stale_url_files() -> list[str]:
+    """Every file a reader can follow a repository link out of.
+
+    This script is never scanned: it is not markdown and it holds the stale
+    patterns themselves, so including it would make the check fail on its own
+    definition.
+    """
+    found = [f for f in glob.glob("*.md") if os.path.isfile(f)]
+    for root in STALE_URL_ROOTS:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in STALE_URL_PRUNE]
+            found.extend(
+                os.path.join(dirpath, name)
+                for name in filenames
+                if name.endswith(STALE_URL_EXTS)
+            )
+    return sorted(set(found))
+
+
 # ── 1. docs.json is valid JSON ────────────────────────────────────────────────
 @check("docs.json is valid JSON")
 def _() -> list[str]:
@@ -124,12 +162,17 @@ def _() -> list[str]:
 @check("No stale repo URLs")
 def _() -> list[str]:
     stale = ["Hawksight-AI/semantica", "semantica-dev/semantica"]
-    files = ALL_MD + [f"{DOCS}/docs.json"]
+    # Match the URL form only. "github.com/<org>/semantica" catches plain repo
+    # links and Colab badges (colab.research.google.com/github/<org>/...) alike,
+    # while leaving alone prose that discusses the rename and the GitHub
+    # Sponsors account at github.com/sponsors/Hawksight-AI — a funding
+    # destination, not a repository, so it must not be renamed with them.
+    patterns = [(pat, re.compile(rf"github\.com/{re.escape(pat)}")) for pat in stale]
     return [
-        f"{f}: '{pat}'"
-        for f in files
-        for pat in stale
-        if pat in read(f)
+        f"{fpath}: 'github.com/{pat}'"
+        for fpath in stale_url_files()
+        for pat, pattern in patterns
+        if pattern.search(read_lossy(fpath))
     ]
 
 

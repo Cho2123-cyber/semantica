@@ -9,7 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Pipeline composition: chain, merge, and nest existing pipelines into a larger one**
+  - New `PipelineComposer` (`semantica/pipeline/pipeline_composer.py`), exported from `semantica.pipeline`. A pipeline built with `PipelineBuilder.build()` was previously a terminal artifact — there was no supported way to reuse one inside another, so a stage shared by several pipelines had to be re-declared step by step in each of them
+  - `chain(*pipelines)` makes every entry step of each pipeline wait for every terminal step of the one before it; `merge(*pipelines, join=None)` keeps pipelines as independent branches of a single graph, with an optional join step that waits for all of them; `nest(parent, child, at, mode)` splices a pipeline in `"after"`, `"before"`, or in `"replace"` of one parent step, rewiring both sides of the seam
+  - Step names are namespaced with their source pipeline's name and dependencies are rewritten to match, so two pipelines that both have a `parse` step compose cleanly. `namespace=False` keeps the original names and raises `ValidationError` on a collision; explicit per-pipeline prefixes are also accepted. Composing a pipeline with itself works — the second copy gets a `_2` suffix on its namespace
+  - Source pipelines are never mutated: each composition returns fresh `PipelineStep` objects with run status reset, and every result is checked with `PipelineValidator` before it is returned (`validate=False` opts out). Composed pipelines record their lineage in `metadata["composition"]`, which stays plain data so it survives `PipelineSerializer` round trips
+  - `PipelineBuilder.include(pipeline, namespace=True, after=None)` brings the same capability into the DSL, dropping a built pipeline into a builder that is still being assembled; it returns the builder, so it chains with `connect_steps()` and `set_parallelism()`
+  - New coverage in `tests/pipeline/test_pipeline_composer.py` (54 tests) across all three operations, namespacing and collision handling, source immutability, execution ordering, config/metadata merging, serialization, and validation failures
+  - Documented in `docs/guides/pipeline.md`, `docs/reference/pipeline.md`, `semantica/pipeline/pipeline_usage.md`, and the `semantica.pipeline` section of the README, plus a runnable cookbook notebook at `cookbook/advanced/15_Pipeline_Composition.ipynb` (every code cell verified to run against the core package, no API keys or optional backends needed)
+
 ### Fixed
+
+- **`plugins/skills/decision/SKILL.md` was not valid UTF-8, so its frontmatter could not be parsed**
+  - Two `0x97` bytes — Windows-1252 em dashes that never got transcoded — sat in the file, one of them inside the YAML frontmatter's `description:` value. Any UTF-8 loader reading that frontmatter fails outright with `'utf-8' codec can't decode byte 0x97`, so the skill's own description was unreadable; the other byte sat in the `explain <decision_id>` section body
+  - Both replaced with the UTF-8 em dash (`U+2014`) that the seven sibling `SKILL.md` files already use. The edit is byte-level: decoding the original as Windows-1252 yields exactly the text the fixed file yields as UTF-8, so nothing but those two characters changed
+  - This was the only non-UTF-8 text file in the repository; a fresh walk over every `.md`, `.py`, `.json`, `.yml`, `.yaml`, `.ipynb`, `.txt`, `.toml`, `.cfg`, `.ttl` and `.in` file now finds none
+
+- **`docs_check.py`'s stale-URL check could not see most of the repository**
+  - The check scanned `docs/**/*.md` plus `docs/docs.json` — 80 files. Everything a reader actually follows a repository link out of sat outside it: the cookbook notebooks, the GitHub issue and discussion templates, `CONTRIBUTING.md`, the editor plugin manifests. That is how an entire cookbook of dead Colab badges stayed green for so long
+  - Widened to 219 files: repo-root markdown plus `.md`, `.json`, `.yml`, `.yaml`, and `.ipynb` under `docs/`, `.github/`, `plugins/`, `cookbook/`, and `semantica/`
+  - Collection uses `os.walk` rather than `glob`. `glob` wildcards skip dot-prefixed entries, so `plugins/**/*.json` matches exactly one file while the plugin manifests actually live in `plugins/.claude-plugin/`, `plugins/.cline-plugin/` and seven more — 16 files a glob-based sweep would have silently missed, reproducing the blind spot being fixed
+  - Matching narrowed from a bare substring to the URL form `github.com/<stale org>/semantica`, which still catches Colab badges (`colab.research.google.com/github/<org>/...`) while leaving prose that discusses the rename — and the GitHub Sponsors account at `github.com/sponsors/Hawksight-AI` — correctly unflagged
+  - Reads for this check tolerate non-UTF-8 bytes, which is what surfaced the `SKILL.md` encoding bug below: one stray `0x97` crashed the widened check outright. Repository URLs are ASCII, so lossy decoding cannot hide a match, and one bad byte in an unrelated file must not take the whole check down
+
+- **Every cookbook notebook's "Open In Colab" badge pointed at a repository that no longer exists**
+  - All 27 notebooks carrying a badge linked to `Hawksight-AI/semantica` — the stale org that `docs_check.py` already bans in docs markdown, and which its "No stale repo URLs" check never saw because that check only scans `docs/**/*.md`. Every badge was a dead link, so "Open In Colab" failed for the entire cookbook. Repointed to `semantica-agi/semantica`, the canonical repository named in `pyproject.toml`'s `[project.urls]`
+  - The same stale org appeared in the "Questions or Issues? / Need Help?" footer link of 5 of those notebooks (32 occurrences in total); fixed alongside the badges, since a working badge above a dead repo link in the same notebook is still a broken page
+  - **Fixed along the way**: 7 badges were broken independently of the org, pointing at notebook filenames that do not exist (`03_Document_Parsing.ipynb`'s badge targeted `04_Document_Parsing.ipynb`, `04_Data_Normalization.ipynb` targeted `05_Data_Normalization.ipynb`, and likewise for `07_Building_Knowledge_Graphs`, `08_Your_First_Knowledge_Graph`, `10_Graph_Analytics`, `12_Embedding_Generation`, and `16_Visualization`) — an off-by-one left over from a renumbering. Each badge now targets the notebook that carries it, verified against the files on disk
+  - The same dead repository URL was then swept out of the rest of the repo: 55 occurrences across 20 files, covering `.github/` (issue/discussion templates, `SUPPORT.md`), `CONTRIBUTING.md`, `CONTRIBUTORS.md`, `CODE_OF_CONDUCT.md`, `CHANGELOG.md`'s own "GitHub Releases" link, all nine editor plugin manifests plus the plugin marketplace and README, `semantica/change_management/change_management_usage.md`, and a mocked clone URL in `tests/ingest/test_notebook_02.py`
+  - Deliberately not renamed: `github.com/sponsors/Hawksight-AI` in `.github/SUPPORT.md` and `github: Hawksight-AI` in `.github/FUNDING.yml`. Those name a GitHub Sponsors account, not a repository — renaming them with the repo URLs would point sponsorship somewhere else. `docs_check.py` keeps the stale strings too, as the patterns its check searches for
+  - **Also added**: the 10 notebooks that carried no Colab badge at all now have one, so every notebook in the cookbook opens in Colab. Nine store their cell source as a list of lines and one (`21_Amazon_Neptune_Store.ipynb`) as a single string — nbformat allows both — so the badge was inserted in each file's own form rather than normalising them. All 38 badges now resolve to the notebook that carries them
+
+- **`PipelineSerializer` round trips silently dropped every step dependency**
+  - `serialize_pipeline()` writes `dependencies`, `delta_mode`, `base_version_id`, and `target_version_id` as siblings of each step's `"config"` key, but `build_pipeline()` — which `deserialize_pipeline()` delegates to — only read what was inside `"config"`. Any pipeline wired with `connect_steps()` came back from a round trip as a flat set of independent steps, so `ExecutionEngine` ran them in declaration order rather than dependency order: silently wrong output instead of an error. Restoring a serialized pipeline "on any machine and execute" is documented behavior in `docs/reference/pipeline.md`, and the delta-mode fields were dropped the same way
+  - `build_pipeline()` now applies those sibling keys when they are present. Step dicts that declare dependencies *inside* `"config"` — the form documented for hand-written pipeline configs in `docs/guides/pipeline.md` — behave exactly as before
+  - New regression coverage in `tests/pipeline/test_pipeline.py::TestPipelineSerializerRoundTrip`, including a pipeline whose declaration order is the reverse of its dependency order and a delta-mode step
 
 - **MCP server reported a stale `0.4.0` version instead of the installed package version** (#870, closes #863) by @oiahoon
   - `semantica/mcp_server/__init__.py` hardcoded `"version": "0.4.0"` in both the MCP `initialize` response (`SERVER_INFO`) and the `semantica://schema/info` resource, regardless of the actual installed `semantica` version — every MCP client (Claude Desktop, Windsurf, Cline, Continue, VS Code Copilot, etc.) showed the wrong server version. Both surfaces now derive from `semantica.__version__`, the package's authoritative version source, so they can no longer drift from `pyproject.toml`
@@ -1213,4 +1249,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-For detailed release notes, see [GitHub Releases](https://github.com/Hawksight-AI/semantica/releases).
+For detailed release notes, see [GitHub Releases](https://github.com/semantica-agi/semantica/releases).

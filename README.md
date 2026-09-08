@@ -838,6 +838,31 @@ status   = engine.get_pipeline_status(pipeline.name)
 progress = engine.get_progress(pipeline.name)
 ```
 
+Built pipelines are reusable: `PipelineComposer` combines them into a larger one, copying the sources rather than mutating them.
+
+```python
+from semantica.pipeline import PipelineComposer, PipelineStep
+
+composer = PipelineComposer()
+
+# Sequential: kg_pipeline starts once ingest_pipeline has fully finished
+end_to_end = composer.chain(ingest_pipeline, kg_pipeline, name="end_to_end")
+
+# Parallel branches, converging on one join step
+merged = composer.merge(
+    stix_pipeline,
+    rss_pipeline,
+    join=PipelineStep(name="merge", step_type="kg_merge", handler=merge_graphs),
+)
+
+# Nested: splice a sub-pipeline in "after" (or "before"/"replace") one step
+with_normalize = composer.nest(main_pipeline, normalize_pipeline, at="ingest")
+
+# Step names are namespaced by source pipeline, and dependencies rewritten to match
+[step.name for step in end_to_end.steps]
+# ['ingest_pipeline.ingest', ..., 'kg_pipeline.build_kg', 'kg_pipeline.export']
+```
+
 </details>
 
 <details>

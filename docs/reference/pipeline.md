@@ -11,6 +11,7 @@ icon: "gear"
 - `PipelineValidator` catches cycles, missing handlers, and config errors before running
 - Pre-built templates: `"document_processing"`, `"rag_pipeline"`, `"kg_construction"`, `"ontology_generation"`
 - Pipelines are serializable to YAML: save and reload in any environment
+- `PipelineComposer` reuses whole pipelines: chain, merge, or nest them into a larger one
 
 
 ## Exported Classes
@@ -23,6 +24,7 @@ icon: "gear"
 | `FailureHandler` | Per-step strategy: `skip`, `retry`, `abort`, or `fallback` on failure |
 | `ParallelismManager` | Thread or process pool for concurrent step execution with configurable workers |
 | `PipelineValidator` | Catches dependency cycles, missing handlers, and config errors before running |
+| `PipelineComposer` | Composes existing pipelines: `chain`, `merge`, `nest` |
 | `PipelineTemplateManager` | Pre-built templates: `"document_processing"`, `"rag_pipeline"`, `"kg_construction"`, `"ontology_generation"` |
 
 ## Why Use a Pipeline?
@@ -269,6 +271,45 @@ pipeline = builder.build("full_pipeline")
 result   = ExecutionEngine().execute_pipeline(pipeline, data="data/")
 ```
 
+## Compose Pipelines
+
+`PipelineComposer` builds a new pipeline out of pipelines you already have. Source pipelines are copied, never mutated, so the same sub-pipeline can be reused across compositions:
+
+```python
+from semantica.pipeline import PipelineComposer, PipelineStep
+
+composer = PipelineComposer()
+
+# Sequential: kg_pipeline waits for every terminal step of ingest_pipeline
+end_to_end = composer.chain(ingest_pipeline, kg_pipeline, name="end_to_end")
+
+# Parallel branches, converging on one join step
+merged = composer.merge(
+    stix_pipeline,
+    rss_pipeline,
+    join=PipelineStep(name="merge", step_type="kg_merge", handler=merge_graphs),
+)
+
+# Nested: splice a sub-pipeline in after the "ingest" step
+with_normalize = composer.nest(
+    main_pipeline, normalize_pipeline, at="ingest", mode="after"
+)
+```
+
+| Method | Result |
+| :--- | :--- |
+| `chain(*pipelines)` | Each pipeline starts only after the previous one has fully finished |
+| `merge(*pipelines, join=None)` | Pipelines become independent branches of one graph; an optional `join` step waits for all of them |
+| `nest(parent, child, at, mode)` | The child is spliced `"after"`, `"before"`, or in `"replace"` of one parent step |
+
+Step names are prefixed with their source pipeline's name (`ingest_pipeline.parse`) and dependencies are rewritten to match. Pass `namespace=False` to keep the original names, or one explicit prefix per pipeline. Every composition is validated before it is returned, and records its lineage in `metadata["composition"]`.
+
+`PipelineBuilder.include(pipeline, after=...)` does the same thing from inside the DSL, adding a built pipeline to a builder that is still being assembled.
+
+<Tip>
+  `ExecutionEngine` passes a single value along the topological order, so a chained pipeline receives the output of whichever terminal step ran last. Give each pipeline one terminal step — or an explicit `join` — when the hand-off value matters.
+</Tip>
+
 ## Serialize and Restore Pipelines
 
 `PipelineSerializer` converts a pipeline to JSON or dict for storage and reloads it later:
@@ -293,7 +334,7 @@ result = ExecutionEngine().execute_pipeline(restored, data="data/")
 ```
 
 <Tip>
-  Serialized pipelines capture step names, types, and config: but not handler functions (callables can't be serialized). Re-register handlers on the restored steps before executing.
+  Serialized pipelines capture step names, types, config, and dependencies: but not handler functions (callables can't be serialized). Re-register handlers on the restored steps before executing.
 </Tip>
 
 ## Pre-Built Templates
@@ -592,3 +633,4 @@ StepStatus.SKIPPED    # Skipped due to FailureHandler "skip" strategy
 - [Semantic Extract](semantic_extract) — Core extraction step.
 - [Knowledge Graph](kg) — Graph construction step.
 - [Export](export) — Final output step.
+- [Pipeline Composition notebook](https://github.com/semantica-agi/semantica/blob/main/cookbook/advanced/15_Pipeline_Composition.ipynb) — Composing built pipelines · *Advanced*
